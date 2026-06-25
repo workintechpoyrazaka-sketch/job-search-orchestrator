@@ -1,9 +1,8 @@
-"""Remotive adapter — fetch remote jobs and normalize to the common schema.
+"""Remotive source adapter: fetch remote jobs and map them to the common schema.
 
-Remotive public API: https://remotive.com/api/remote-jobs
-- Ücretsiz, anahtar gerektirmez.
-- İlanlar 24 saat gecikmeli; günde ~4 çağrıdan fazlası önerilmez.
-- Bu adaptör storage'i BİLMEZ; sadece dış veriyi şemamıza çevirir.
+Public API: https://remotive.com/api/remote-jobs (no key required).
+Postings are delayed ~24h; the provider asks for at most ~4 calls/day.
+This adapter has no knowledge of storage; it only normalizes external data.
 """
 
 import hashlib
@@ -13,42 +12,30 @@ import requests
 
 BASE_URL = "https://remotive.com/api/remote-jobs"
 SOURCE = "remotive"
-TIMEOUT = 30  # saniye — askıda kalmamak için
+TIMEOUT = 30
 
 
 def fetch_remotive(category: str = "data", limit: int = 50) -> list[dict]:
-    """Remotive'den ham ilan listesi çek.
-
-    category: Remotive kategori slug'u (örn. 'data', 'software-dev').
-    limit: kaç ilan istendiği (API 'limit' parametresi).
-    Döner: ham iş dict'lerinin listesi (henüz normalize edilmemiş).
-    """
+    """Fetch raw job listings for a Remotive category slug."""
     params = {"category": category, "limit": limit}
     headers = {"User-Agent": "job-search-orchestrator (personal use)"}
 
     resp = requests.get(BASE_URL, params=params, headers=headers, timeout=TIMEOUT)
-    resp.raise_for_status()  # 4xx/5xx → exception (sessiz hata yok)
+    resp.raise_for_status()
 
-    payload = resp.json()
-    jobs = payload.get("jobs", [])
-    print(f"[fetch] {SOURCE}/{category}: {len(jobs)} ilan geldi")
+    jobs = resp.json().get("jobs", [])
+    print(f"[fetch] {SOURCE}/{category}: {len(jobs)} jobs")
     return jobs
 
 
 def _content_hash(title: str, description: str) -> str:
-    """title+description'tan kısa bir hash — ilan değişti mi tespiti için."""
+    """Short hash of title+description to detect later content changes."""
     raw = f"{title}\n{description}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def normalize_remotive(raw: dict) -> dict:
-    """Tek bir ham Remotive ilanını ortak şemamıza çevir.
-
-    Remotive alanları → bizim kolonlar:
-      id                        -> external_id
-      company_name              -> company
-      candidate_required_location -> location
-    """
+    """Map one raw Remotive listing to the common schema."""
     title = raw.get("title") or ""
     description = raw.get("description") or ""
 
@@ -69,16 +56,13 @@ def normalize_remotive(raw: dict) -> dict:
     }
 
 
-# Mini test: python -m src.adapters.remotive
-# Canlı API'yi çağırır (internet gerekir), DB'ye YAZMAZ.
 if __name__ == "__main__":
     raw_jobs = fetch_remotive(category="data", limit=3)
-
     if not raw_jobs:
-        print("[uyarı] Hiç ilan gelmedi — kategori slug'u yanlış olabilir.")
+        print("[warn] no jobs returned; the category slug may be wrong")
     else:
         first = normalize_remotive(raw_jobs[0])
-        print("\n[normalize] İlk ilan, şemamıza çevrilmiş hali:")
+        print("\n[normalize] first listing mapped to schema:")
         for key, value in first.items():
             preview = str(value)
             if len(preview) > 70:
