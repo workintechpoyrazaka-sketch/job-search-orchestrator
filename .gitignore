@@ -1,0 +1,17 @@
+# venv
+.venv/
+venv/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# data & secrets
+data/*.db
+data/*.duckdb
+.env
+
+# os / editor
+.DS_Store
+.vscode/
