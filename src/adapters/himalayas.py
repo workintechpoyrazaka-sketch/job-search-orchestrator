@@ -14,19 +14,24 @@ SOURCE = "himalayas"
 TIMEOUT = 30
 
 
-def fetch_himalayas(search: str, page: int = 1, sort: str = "recent") -> list[dict]:
+def fetch_himalayas(search: str, page: int = 1, sort: str = "recent",
+                    worldwide: bool = False) -> list[dict]:
     """Fetch raw job listings from Himalayas' search endpoint.
 
-    `search` is a keyword query matched across the posting. Results are
-    paginated via `page` (20 per page). The MVP fetches one page per query;
-    deeper pagination is queued as an improvement.
+    `search` is a keyword query matched across the posting. Set `worldwide=True`
+    to request only roles open to any location (server-side filter) -- this is
+    the eligible set for an applicant with no local work authorization. Results
+    are paginated via `page` (20 per page); one page per query for the MVP.
     """
     params = {"q": search, "page": page, "sort": sort}
+    if worldwide:
+        params["worldwide"] = "true"
     headers = {"User-Agent": "job-search-orchestrator (personal use)"}
     resp = requests.get(BASE_URL, params=params, headers=headers, timeout=TIMEOUT)
     resp.raise_for_status()
     jobs = resp.json().get("jobs", [])
-    print(f"[fetch] {SOURCE}/q={search} (page {page}): {len(jobs)} jobs")
+    scope = " [worldwide]" if worldwide else ""
+    print(f"[fetch] {SOURCE}/q={search}{scope} (page {page}): {len(jobs)} jobs")
     return jobs
 
 
@@ -92,7 +97,7 @@ def normalize_himalayas(raw: dict) -> dict:
 
 
 if __name__ == "__main__":
-    raw_jobs = fetch_himalayas(search="data analyst")
+    raw_jobs = fetch_himalayas(search="data analyst", worldwide=True)
     if not raw_jobs:
         print("[warn] no jobs returned; check the query")
     else:
