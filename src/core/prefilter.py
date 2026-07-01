@@ -5,23 +5,19 @@ the LLM scorer spends tokens on plausible matches. Relevance nuance (e.g.
 "is data labeling the right kind of data role?") is left to the scorer.
 """
 
-import re
-
 from src.core.storage import get_connection
 
 # --- targeting config (edit to retune) ---
 
-# Remote eligibility for a Turkey-based candidate.
+# Remote eligibility for a Turkey-based candidate with no local work
+# authorization. Eligibility is an allowlist: a posting passes only if its
+# location carries one of these hints. A concrete but unlisted region (e.g.
+# "Germany", "United Kingdom") is a hard no and fails here rather than leaking
+# to the paid scorer. EMEA/Europe are kept because remote-contract roles are
+# often open to Turkey-based work; the scorer and human review refine those.
 ELIGIBLE_HINTS = (
     "worldwide", "anywhere", "global", "emea", "europe",
     "turkey", "turkiye",
-)
-# Region tokens that exclude a Turkey-based candidate. Matched as whole
-# words to avoid false hits (e.g. "usa" inside "usability").
-EXCLUDE_REGIONS = (
-    "usa", "united states", "canada", "latam", "brazil",
-    "uk only", "india", "philippines", "australia",
-    "argentina", "mexico",
 )
 
 # Career ladder. First match wins; sets ladder_match.
@@ -43,21 +39,13 @@ EXCLUDE_TITLE = ("sales", "marketing", "designer", "customer support",
                  "product engineer", "copywriter", "social media")
 
 
-def _has_word(text: str, word: str) -> bool:
-    """Whole-word / phrase match, case-insensitive."""
-    return re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) is not None
-
-
 def is_remote_eligible(location: str | None) -> bool:
     loc = (location or "").lower()
     if not loc:
-        return True
-    # An eligible region anywhere in a mixed list wins ("Americas, Europe").
-    if any(h in loc for h in ELIGIBLE_HINTS):
-        return True
-    if any(_has_word(loc, r) for r in EXCLUDE_REGIONS):
-        return False
-    return True  # unknown region: let it through, scorer refines
+        return True  # unspecified location: ambiguous, let the scorer refine
+    # Allowlist: pass only when an eligible region appears anywhere in the
+    # string (handles mixed lists like "Americas, Europe").
+    return any(h in loc for h in ELIGIBLE_HINTS)
 
 
 def match_ladder(title: str | None) -> str | None:
