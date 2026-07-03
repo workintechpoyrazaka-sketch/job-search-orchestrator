@@ -61,6 +61,38 @@ SYSTEM_PROMPT = (
     "}"
 )
 
+COVER_LETTER_SYSTEM_PROMPT = (
+    "You write concise, honest cover letters for a job candidate. You are "
+    "given: (1) a match analysis mapping a specific posting's requirements to "
+    "the candidate's real experience, (2) the candidate's profile, and (3) "
+    "the role title and company. Write ONE cover letter for that role.\n\n"
+    "GROUNDING RULES (non-negotiable):\n"
+    "- Use ONLY facts present in the analysis and the profile. Never invent "
+    "or imply employers, job titles, years of experience, dates, metrics, or "
+    "technologies that are not there.\n"
+    "- Never claim tenure, seniority, or experience the candidate lacks. "
+    "Follow the \"bridge\" guidance in each gap: frame transferable "
+    "experience truthfully, never as the missing credential.\n\n"
+    "WRITING GUIDANCE:\n"
+    "- Open with the candidate's strongest evidence: lead with a "
+    "\"strong\"-strength match and, where possible, the flagship deployed "
+    "project with a concrete scale metric. Hook in the first two sentences.\n"
+    "- Address the role's most important requirements using the matches. "
+    "Prefer \"strong\" evidence over \"moderate\".\n"
+    "- Handle real gaps with honesty and brevity: acknowledge the trajectory "
+    "via the bridge framing; do NOT dwell, apologize, or over-explain. One "
+    "graceful sentence at most, or omit if it weakens the letter.\n"
+    "- Confident, not inflated. Specific, evidence-led, no filler or cliches "
+    "(\"passionate about\", \"team player\", \"hit the ground running\").\n\n"
+    "FORMAT:\n"
+    "- 150-220 words.\n"
+    "- Greeting: address the company by name if given (\"Dear <Company> "
+    "team,\"), else \"Dear Hiring Team,\". Never invent a person's name.\n"
+    "- Plain professional prose, simple sign-off line.\n"
+    "- Output ONLY the letter, starting at the greeting. No preamble, no "
+    "notes, no markdown, no subject line."
+)
+
 _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _BLOCK_END = re.compile(r"</(p|h[1-6]|li|ul|ol|div)>", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
@@ -149,6 +181,35 @@ def analyze_match(client, title, company, location, description, profile_text):
     return _parse_analysis(_extract_text(resp))
 
 
+def write_cover_letter(client, analysis, profile_text, title, company):
+    """Chain link 2: turn the match analysis into a grounded cover letter.
+
+    Consumes link 1's analysis object (not the raw posting) -- pure prompt
+    chaining, so grounding flows through the reviewed analysis rather than the
+    model re-reading the posting. Returns the letter text for human review;
+    nothing is sent. max_tokens is a cap, not a charge, so keep it generous
+    to leave room for extended thinking without truncating a short letter.
+    """
+    user_msg = (
+        f"Role: {title or '-'}\n"
+        f"Company: {company or '-'}\n\n"
+        "MATCH ANALYSIS:\n"
+        f"{json.dumps(analysis, ensure_ascii=False, indent=2)}\n\n"
+        "CANDIDATE PROFILE:\n"
+        f"{profile_text}"
+    )
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=COVER_LETTER_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    letter = _extract_text(resp).strip()
+    if not letter:                                    # fail loud, never draft empty
+        raise ValueError("empty cover letter from model")
+    return letter
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
 
@@ -156,16 +217,19 @@ if __name__ == "__main__":
     client = Anthropic()          # SDK reads the key from the environment
     profile = load_profile()
 
-    # Smoke test: the top-scored posting only. No DB write yet -- the drafted
-    # status + stored draft belong to chain link 2, once the letter exists.
+    # Smoke test: full two-link chain on one posting (Dwelly). No DB write --
+    # storing the draft + status='drafted' comes once we approve the output.
     with get_connection() as conn:
         row = conn.execute(
             "SELECT title, company, location, description FROM jobs "
-            "WHERE relevance_score = 95 LIMIT 1"
+            "WHERE company = 'Dwelly' LIMIT 1"
         ).fetchone()
 
-    result = analyze_match(
+    analysis = analyze_match(
         client, row["title"], row["company"],
         row["location"], row["description"], profile,
     )
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    letter = write_cover_letter(
+        client, analysis, profile, row["title"], row["company"],
+    )
+    print(letter)
