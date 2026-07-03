@@ -12,6 +12,8 @@ titles, or experience.
 import html
 import json
 import re
+import sys
+from datetime import datetime
 
 from anthropic import Anthropic
 
@@ -24,6 +26,11 @@ MODEL = "claude-sonnet-5"
 
 # Grounding doc. Run from repo root (python -m src.core.drafting).
 PROFILE_PATH = "profile.md"
+
+# Draft only for jobs the scorer already rated at least this relevant. Mirrors
+# the scorer's threshold discipline; the runner's idempotency guard is the
+# status column, this is the eligibility bar.
+MIN_SCORE = 78
 
 SYSTEM_PROMPT = (
     "You are a job-match analyst. You compare one job posting against a "
@@ -213,6 +220,47 @@ def write_cover_letter(client, analysis, profile_text, title, company):
     return letter
 
 
+def run_drafting(conn, client, profile_text, limit=None):
+    """Draft cover letters for scored, not-yet-drafted jobs; update in place.
+
+    Symmetric to run_scoring: idempotent selection + a per-row commit as a
+    checkpoint. The status column is the not-done marker -- a scored job is
+    still status='new' (scoring never touches status), so status='new' AND a
+    passing score means "eligible, not yet drafted"; the UPDATE flips it to
+    'drafted', so a re-run skips it. Fail loud (no per-row catch): if a model
+    call raises mid-batch, finished drafts are already committed and a re-run
+    resumes cleanly. Nothing is sent -- status='drafted' only, application
+    stays in Poi's hands.
+    """
+    sql = ("SELECT id, title, company, location, description FROM jobs "
+           "WHERE relevance_score >= ? AND status = 'new'")
+    params = [MIN_SCORE]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    rows = conn.execute(sql, params).fetchall()
+
+    drafted = 0
+    for row in rows:
+        analysis = analyze_match(
+            client, row["title"], row["company"],
+            row["location"], row["description"], profile_text,
+        )
+        letter = write_cover_letter(
+            client, analysis, profile_text, row["title"], row["company"],
+        )
+        conn.execute(
+            "UPDATE jobs SET cover_letter = ?, status = 'drafted', "
+            "status_updated_at = ? WHERE id = ?",
+            (letter, datetime.now().isoformat(timespec="seconds"), row["id"]),
+        )
+        conn.commit()                                 # checkpoint per row
+        drafted += 1
+        print(f"  [drafted] {row['company']} -- {row['title']} "
+              f"({len(letter)} chars)")
+    return {"drafted": drafted}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
 
@@ -220,19 +268,11 @@ if __name__ == "__main__":
     client = Anthropic()          # SDK reads the key from the environment
     profile = load_profile()
 
-    # Smoke test: full two-link chain on one posting (Dwelly). No DB write --
-    # storing the draft + status='drafted' comes once we approve the output.
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT title, company, location, description FROM jobs "
-            "WHERE company = 'Dwelly' LIMIT 1"
-        ).fetchone()
+    # First positional arg caps the batch: `1` = single-row smoke for the
+    # first live persist (prove the UPDATE writes before spending Sonnet calls
+    # on the full pool); no arg = full batch.
+    limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
 
-    analysis = analyze_match(
-        client, row["title"], row["company"],
-        row["location"], row["description"], profile,
-    )
-    letter = write_cover_letter(
-        client, analysis, profile, row["title"], row["company"],
-    )
-    print(letter)
+    with get_connection() as conn:
+        summary = run_drafting(conn, client, profile, limit=limit)
+    print(f"[drafting] drafted {summary['drafted']} job(s)")
