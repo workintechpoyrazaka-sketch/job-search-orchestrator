@@ -11,6 +11,8 @@ __pycache__/
 data/*.db
 data/*.duckdb
 .env
+# local grounding doc (PII: real profile, never committed)
+profile.md
 
 # os / editor
 .DS_Store
