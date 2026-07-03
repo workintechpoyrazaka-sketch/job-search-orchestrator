@@ -23,7 +23,16 @@ SYSTEM_PROMPT = (
     "Product Analyst. Rate fit from 0 to 100, where 100 is an ideal remote "
     "data analyst role open to candidates in Turkey, and 0 is irrelevant or "
     "region-locked against Turkey. Be strict: tangential or vague roles score "
-    "low. Respond with ONLY a JSON object, no prose, no code fences:\n"
+    "low.\n"
+    # Seniority ranking (not a filter): a hard tenure/seniority gate the
+    # candidate does not meet still stays applicable as a stretch, but must
+    # not rank above a clean entry/mid role. The drafting layer bridges the
+    # gap honestly downstream; scoring's job here is to order the pool.
+    "If the posting carries a hard seniority or tenure gate (e.g. 5+ years, "
+    "Senior/Lead/Principal) that an entry-level candidate does not meet, cap "
+    "the score in the 78-83 band even when skill keywords overlap strongly -- "
+    "eligible as a stretch, never a full match.\n"
+    "Respond with ONLY a JSON object, no prose, no code fences:\n"
     '{"score": <integer 0-100>, "reason": "<one short sentence>"}'
 )
 
