@@ -3,7 +3,7 @@ Run: python -m src.collect
 """
 import time
 
-from src.adapters import himalayas, remotive
+from src.adapters import himalayas, remoteok, remotive
 from src.core.storage import get_connection, init_db, upsert_jobs
 
 # Search terms tuned to the Data Analyst ladder. Each term = one API call per
@@ -33,6 +33,10 @@ ADAPTERS = {
     himalayas.SOURCE: (
         lambda q: himalayas.fetch_himalayas(search=q, worldwide=True),
         himalayas.normalize_himalayas,
+    ),
+    remoteok.SOURCE: (
+        lambda q: remoteok.fetch_remoteok(),  # q ignored: küçük feed, budamayı prefilter yapar
+        remoteok.normalize_remoteok,
     ),
 }
 
