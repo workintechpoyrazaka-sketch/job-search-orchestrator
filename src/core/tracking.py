@@ -12,6 +12,7 @@ Design (Module 4):
     the one move (-> applied) that carries an external precondition.
 """
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -33,6 +34,47 @@ TRANSITIONS: dict[str, set[str]] = {
 # Both are the same kind of rule -- a policy about the destination -- so both
 # live here. What is unique to 'applied' (authorization) lives in its door.
 REQUIRES_NOTE: set[str] = {"archived", "applied"}
+
+# Phrases that hint a job may be eligibility-gated in a way the pipeline cannot
+# see from structured fields (the Uken blind spot). This list is an ASSISTANT,
+# NOT AN ORACLE: a hit directs the eye to a likely disqualifier, but an EMPTY
+# result is NOT a clearance -- it only means no *known* phrase matched. New
+# postings will phrase restrictions in ways not listed here. The apply gate
+# must force a human look regardless of whether this returns anything.
+# Queued (improvement backlog): replace with structured extraction (Path 2).
+RED_FLAG_PATTERNS: list[str] = [
+    r"u\.?s\.?\s+only",
+    r"us[- ]based only",
+    r"must\s+(?:be\s+)?(?:reside|located|based)",
+    r"located in the (?:us|united states|uk|eu)",
+    r"authoriz(?:ed|ation)\s+to work",
+    r"work\s+authoriz",
+    r"no\s+sponsorship",
+    r"(?:visa\s+)?sponsorship\s+(?:is\s+)?not",
+    r"unable to sponsor",
+    r"no\s+c2c",
+    r"citizens?\s+only",
+    r"eligible to work in",
+    r"within\s+(?:the\s+)?(?:us|usa|uk|eu|canada)",
+    r"(?:utc|gmt)\s*[+\-]\s*\d",
+]
+
+
+def scan_red_flags(text: str | None) -> list[str]:
+    """Return the red-flag phrases found in `text` (case-insensitive).
+
+    Pure and testable: no printing, no I/O. Returns the literal matched
+    substrings so the caller can show the human exactly what tripped.
+    An EMPTY list means "no known pattern matched" -- NOT "eligible".
+    The caller must treat absence as unknown, never as clearance.
+    """
+    if not text:
+        return []
+    hits: list[str] = []
+    for pat in RED_FLAG_PATTERNS:
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
+            hits.append(m.group(0))
+    return hits
 
 
 class TransitionError(Exception):
@@ -125,19 +167,26 @@ def apply_to_job(
     conn: sqlite3.Connection,
     job_id: int,
     note: str,
+    *,
+    authorized: bool,
 ) -> None:
-    """The one door to 'applied'.
+    """The one door to 'applied'. Pure engine -- no I/O, deterministic.
 
-    Runs the work-authorization check (the Uken blind spot: eligibility that
-    the pipeline cannot see from the job body) BEFORE any write. `note` carries
-    the ATS metadata and is enforced non-empty by REQUIRES_NOTE in the core.
-    An authorization failure raises and nothing is written.
+    `authorized` is the human's assertion that work-authorization / location
+    eligibility has been verified for THIS job (the Uken blind spot: a fact
+    that lives on the application form, not in the stored posting). This
+    function does not compute that fact -- it refuses to write unless the fact
+    is asserted True. The forcing function that MAKES the human look lives one
+    layer out (confirm_and_apply, the CLI bouncer), which is the only sanctioned
+    producer of authorized=True. Keeping this function free of input()/print
+    is what keeps it testable and reusable from a script, GUI, or API.
+
+    `note` carries the ATS metadata; REQUIRES_NOTE enforces it non-empty in the
+    core. An unauthorized call raises and nothing is written.
     """
-    # Part 3 seam -- authorization is a real requirement, not yet built.
-    # Left as an explicit raise so the door exists but cannot silently pass
-    # an unauthorized application. Do NOT delete this to "make it work".
-    raise NotImplementedError(
-        "apply_to_job: work-authorization check (Module 4 Part 3) not built"
-    )
-    # Once authorization exists and passes, the write is exactly:
-    #   _apply_transition(conn, job_id, "applied", note)
+    if not authorized:
+        raise TransitionError(
+            f"job {job_id}: not authorized -- eligibility must be verified "
+            f"before applying (use confirm_and_apply)"
+        )
+    _apply_transition(conn, job_id, "applied", note)
