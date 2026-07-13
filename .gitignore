@@ -18,3 +18,4 @@ profile.md*
 .DS_Store
 .vscode/
 .python-version
+.venv-dashboard/
