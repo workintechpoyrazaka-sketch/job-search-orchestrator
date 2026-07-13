@@ -30,6 +30,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     notes             TEXT,
     UNIQUE (source, external_id)
 );
+
+CREATE TABLE IF NOT EXISTS job_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      INTEGER NOT NULL,
+    from_status TEXT,
+    to_status   TEXT NOT NULL,
+    at          TEXT NOT NULL,
+    note        TEXT,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
 """
 
 COLUMNS = [
@@ -44,6 +54,7 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
