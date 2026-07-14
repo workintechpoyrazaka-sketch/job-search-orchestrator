@@ -9,6 +9,7 @@ __pycache__/
 
 # data & secrets
 data/*.db
+!data/demo.db
 data/*.duckdb
 .env
 # local grounding doc (PII: real profile, never committed)
@@ -19,3 +20,5 @@ profile.md*
 .vscode/
 .python-version
 .venv-dashboard/
+.agents/skills/developing-with-streamlit/
+.agents/
