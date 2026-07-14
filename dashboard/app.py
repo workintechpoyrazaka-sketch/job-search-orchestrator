@@ -1,5 +1,5 @@
 """
-Job-Search Orchestrator - read-only analytics cockpit (Phase 1).
+Job-Search Orchestrator - read-only analytics cockpit.
 
 Aggregate views over the pipeline database:
 funnel, source breakdown, score distribution, drafted queue, audit trail.
@@ -20,6 +20,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -71,14 +72,26 @@ col_a, col_b = st.columns(2)
 col_a.metric("Total jobs", total)
 col_b.metric("Recorded events", events_total)
 
-# ---- funnel: status counts ----
+# ---- funnel: status counts, in lifecycle order ----
+# st.bar_chart sorts the nominal axis alphabetically, which scrambles a
+# funnel (applied/archived/drafted/new). Altair with an explicit sort on
+# the x encoding forces new -> drafted -> applied -> archived.
 st.subheader("Pipeline funnel")
-status_counts = (
+funnel_df = (
     q(conn, "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
     .set_index("status")
-    .reindex(STATUS_ORDER, fill_value=0)["n"]
+    .reindex(STATUS_ORDER, fill_value=0)
+    .reset_index()
 )
-st.bar_chart(status_counts)
+funnel_chart = (
+    alt.Chart(funnel_df)
+    .mark_bar()
+    .encode(
+        x=alt.X("status:N", sort=STATUS_ORDER, title="status"),
+        y=alt.Y("n:Q", title="count"),
+    )
+)
+st.altair_chart(funnel_chart, width="stretch")
 
 # ---- source breakdown ----
 st.subheader("Jobs by source")
@@ -122,7 +135,7 @@ drafted = q(
     """,
 )
 if len(drafted):
-    st.dataframe(drafted, use_container_width=True, hide_index=True)
+    st.dataframe(drafted, width="stretch", hide_index=True)
 else:
     st.info("No drafted jobs.")
 
@@ -139,7 +152,7 @@ if events_total:
         ORDER BY e.at DESC, e.id DESC
         """,
     )
-    st.dataframe(events, use_container_width=True, hide_index=True)
+    st.dataframe(events, width="stretch", hide_index=True)
 else:
     st.info(
         "No state transitions recorded yet. The trail populates as you "
