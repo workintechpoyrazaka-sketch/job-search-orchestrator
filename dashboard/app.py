@@ -31,6 +31,7 @@ STATUS_ORDER = ["new", "drafted", "applied", "archived"]
 
 # Seniority band of interest, per the scoring layer (Path 1 gate).
 BAND_LO, BAND_HI = 78, 83
+SENIOR_RE = r"\b(?:senior|sr|lead|principal|staff)\b"
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -109,17 +110,50 @@ st.bar_chart(by_source)
 st.subheader("Relevance score distribution")
 scored = q(
     conn,
-    "SELECT relevance_score FROM jobs WHERE relevance_score IS NOT NULL",
+    "SELECT relevance_score, title FROM jobs "
+    "WHERE relevance_score IS NOT NULL",
 )
 n_scored = len(scored)
 n_unscored = total - n_scored
+pct = f"{n_scored / total:.0%}" if total else "0%"
 st.caption(
     f"{n_scored} scored - {n_unscored} unscored (NULL). "
-    f"Seniority band of interest: {BAND_LO}-{BAND_HI}."
+    f"Chart covers the {pct} of jobs that have been scored; "
+    f"unscored jobs are absent, not zero. "
+    f"Band of interest: {BAND_LO}-{BAND_HI}. "
+    f"Title marker is a flag to look, not a verdict -- seniority stated only "
+    f"in the description is invisible here (row 400)."
 )
 if n_scored:
-    dist = scored["relevance_score"].value_counts().sort_index()
-    st.bar_chart(dist)
+    def _bucket(s: int) -> str:
+        if s < BAND_LO:
+            return f"below {BAND_LO}"
+        if s <= BAND_HI:
+            return f"{BAND_LO}-{BAND_HI} band"
+        return f"above {BAND_HI}"
+
+    scored["bucket"] = scored["relevance_score"].apply(_bucket)
+    scored["title_says"] = (
+        scored["title"]
+        .str.contains(SENIOR_RE, case=False, regex=True, na=False)
+        .map({True: "senior marker in title", False: "no marker"})
+    )
+    chart = (
+        alt.Chart(scored)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "bucket:N",
+                sort=[f"below {BAND_LO}", f"{BAND_LO}-{BAND_HI} band",
+                      f"above {BAND_HI}"],
+                title="relevance score",
+            ),
+            y=alt.Y("count()", title="jobs"),
+            color=alt.Color("title_says:N", title=None),
+            tooltip=["bucket", "title_says", "count()"],
+        )
+    )
+    st.altair_chart(chart, use_container_width=True)
 else:
     st.info("No scored jobs yet.")
 
