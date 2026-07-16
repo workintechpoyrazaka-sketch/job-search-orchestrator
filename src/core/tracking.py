@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 # Legal forward-only moves. Every state can also reach 'archived' (the single
 # escape). 'archived' and 'rejected' are terminal (empty destination sets).
 TRANSITIONS: dict[str, set[str]] = {
-    "new":      {"drafted", "archived"},
+    "new":      {"drafted", "applied", "archived"},
     "drafted":  {"applied", "archived"},
     "applied":  {"rejected", "archived"},
     "archived": set(),

@@ -58,9 +58,10 @@ def confirm_and_apply(conn, job_id: int, note: str) -> bool:
     # Reuses TRANSITIONS as the single authority (reads it; does not copy it).
     status = row["status"]
     if "applied" not in TRANSITIONS.get(status, set()):
+        valid_from = sorted(s for s, t in TRANSITIONS.items() if "applied" in t)
         print(
             f"job {job_id} is {status!r}; cannot move to 'applied' "
-            f"(must be 'drafted' first). Nothing done."
+            f"(valid from: {', '.join(valid_from)}). Nothing done."
         )
         return False
 
