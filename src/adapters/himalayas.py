@@ -19,9 +19,11 @@ def fetch_himalayas(search: str, page: int = 1, sort: str = "recent",
     """Fetch raw job listings from Himalayas' search endpoint.
 
     `search` is a keyword query matched across the posting. Set `worldwide=True`
-    to request only roles open to any location (server-side filter) -- this is
-    the eligible set for an applicant with no local work authorization. Results
-    are paginated via `page` (20 per page); one page per query for the MVP.
+    to request Himalayas' worldwide-only set (server-side filter). This is
+    Himalayas' CLAIM, not a guarantee: the server infers worldwide from an empty
+    locationRestrictions array, so region-locked roles leak through (see
+    _location). Results are paginated via `page` (20 per page); one page per
+    query for the MVP.
     """
     params = {"q": search, "page": page, "sort": sort}
     if worldwide:
@@ -44,13 +46,15 @@ def _content_hash(title: str, description: str) -> str:
 def _location(location_restrictions: list) -> str:
     """Map Himalayas' locationRestrictions array to the common `location` text.
 
-    An empty array means worldwide on Himalayas. We emit the exact token
-    'Worldwide' so the existing prefilter (built against Remotive, which also
-    uses 'Worldwide') treats these rows identically, with no prefilter change.
-    A non-empty array becomes a comma-joined country list.
+    A non-empty array becomes a comma-joined country list. An empty array is
+    ABSENCE, not permission: Himalayas' server reads it as worldwide, but the
+    employer never said it -- Dwelly returned an empty array for a role its own
+    listing page marks 'United Kingdom only'. Emit '' so the unknown stays
+    unknown and stays countable. The prefilter already passes '' as ambiguous
+    (see is_remote_eligible) -- this changes the record, not the verdict.
     """
     if not location_restrictions:
-        return "Worldwide"
+        return ""
     return ", ".join(location_restrictions)
 
 
