@@ -1,138 +1,124 @@
 """
-Build a synthetic, PII-free demo database for the public dashboard.
+Build the public dashboard database from the REAL job search database.
 
-Why this exists: the real data/jobs.db is gitignored PII (real companies
-targeted, real application outcomes, profile-grounded cover letters). The
-deployed dashboard must never see it. This script generates a stand-in with
-fabricated-but-clearly-sample rows so the live portfolio link shows the
-pipeline's shape without leaking a real job search.
+WHAT CHANGED (2026-07-17) AND WHY:
+This script used to synthesize fictional companies and leave job_events
+empty, on the stated rule: "the deployed dashboard must never see
+data/jobs.db." That rule is REPEALED, deliberately, by Poi on 2026-07-17.
 
-Honesty boundary:
-  - job listings are synthesized (sample data, understood as such).
-  - job_events is left EMPTY. Faking audit events would be fabricating
-    execution history, which is a different (and dishonest) thing than
-    populating demo furniture. The audit trail stays honestly empty.
+Reason for repeal: the fictional site could not be shown to anyone. A demo
+of invented companies demonstrates the pipeline's shape and nothing about
+the pipeline's use. The real board — 283 rows, 3 applications, 3 audit
+events — is the portfolio piece. The fake one was furniture.
 
-Schema is NOT redefined here. We import init_db from the real storage layer
-so the demo DB is byte-identical in schema to production by construction.
+WHAT IS PUBLIC NOW, EXPLICITLY:
+  - Real company names, titles, URLs, locations, salaries.
+  - Real relevance scores and Haiku-written score_reason text about
+    real, named employers.
+  - Real application history: which companies, what outcome, when.
+
+WHAT STAYS OUT, AND WHY IT CANNOT BE SOLVED IN THE UI:
+  - Cover letters. Withheld 2026-07-17. They are generated from profile.md
+    and are that file restated in prose; publishing them publishes it.
+    Excluded at copy time because that is the only place exclusion is
+    possible — see below.
+  - profile.md itself is NOT copied. It is not in this schema and never
+    enters the repo.
+  - There is no "private side" of this dashboard. The deploy is static,
+    read-only, unauthenticated, and committed to a public git repo.
+    Anything in this DB is public whether or not a widget renders it, and
+    is permanent in git history once pushed. Hiding a column in the page
+    hides nothing. The only lever is: in this DB, or not in it.
+
+SCHEMA SOURCE (changed 2026-07-17):
+This script used to call init_db(), which builds from storage.SCHEMA. That
+was believed to make the demo "byte-identical in schema to production by
+construction." It does not, and did not: storage.SCHEMA has no cover_letter
+column, while the live jobs.db does. The column was added to the live DB
+without updating SCHEMA, and init_db's CREATE TABLE IF NOT EXISTS meant the
+drift never fired against an existing DB — only against a fresh one.
+
+So the schema is now read from the SOURCE DB's own sqlite_master. The mirror
+is built from what production reports, not from a transcript of what
+production was once declared to be. If they drift again, this still works.
 
 Run from repo root:  python -m seeds.build_demo
 Output:              data/demo.db  (committed; see .gitignore negation)
+Source:             data/jobs.db  (gitignored, never committed)
 """
 
-import random
-from datetime import datetime, timedelta, timezone
+import sqlite3
 from pathlib import Path
 
-from src.core.storage import get_connection, init_db
+from src.core.storage import get_connection
 
-# Deterministic output: same seed -> same demo.db every run (reproducible).
-random.seed(1974)
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_PATH = ROOT / "data" / "jobs.db"
+DEMO_PATH = ROOT / "data" / "demo.db"
 
-DEMO_PATH = Path(__file__).resolve().parents[1] / "data" / "demo.db"
-
-# Obviously-fictional companies. Fake-but-labeled, never plausibly-real:
-# no one should mistake the demo for a real hiring signal or collide with
-# an actual company name.
-COMPANIES = [
-    "Northwind Analytics", "Globex Data", "Initech Remote", "Umbrella Insights",
-    "Hooli Metrics", "Stark Data Co", "Wayne Analytics", "Cyberdyne Reporting",
-    "Soylent BI", "Vandelay Data", "Wonka Analytics", "Acme Insights",
-    "Prestige Data Group", "Duff Analytics", "Gekko Metrics", "Tyrell Reporting",
-]
-
-TITLES = [
-    "Data Analyst", "Senior Data Analyst", "BI Analyst", "Analytics Engineer",
-    "Business Intelligence Developer", "Reporting Analyst", "Data Scientist",
-    "Product Analyst", "Marketing Analyst", "Operations Analyst",
-    "Data Visualization Engineer", "Insights Analyst",
-]
-
-SOURCES = ["remotive", "himalayas", "remoteok"]
-LOCATIONS = ["Remote (Worldwide)", "Remote (EMEA)", "Remote (Global)", "Remote"]
-JOB_TYPES = ["full_time", "contract"]
-
-# Insert columns, explicit. We insert directly rather than via insert_new_jobs
-# because the demo must SET status/score/notes, which insert_new_jobs (a
-# collect-only helper) does not touch.
-INSERT_COLS = [
-    "source", "external_id", "url", "title", "company", "category",
-    "job_type", "location", "salary", "description", "publication_date",
-    "fetched_at", "content_hash", "prefilter_pass", "ladder_match",
-    "relevance_score", "score_reason", "status", "status_updated_at", "notes",
-]
-
-# Target funnel shape (mirrors the real board's proportions loosely):
-# mostly new, a handful drafted, a couple applied, one archived.
-STATUS_PLAN = (["new"] * 26) + (["drafted"] * 5) + (["applied"] * 3) + (["archived"] * 1)
+# Columns are discovered from the source DB at runtime (see _columns), not
+# listed here. A hardcoded list is a second transcript that can drift from
+# production exactly the way storage.SCHEMA did.
+#
+# 'id' is copied deliberately: job_events.job_id points at job ids. If the
+# demo re-numbered rows, event 2 would silently attach to whatever landed at
+# 962 — a false claim, rendered confidently.
 
 
-def _iso(days_ago: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(timespec="seconds")
+def _clone_schema(src: sqlite3.Connection, dst: sqlite3.Connection) -> None:
+    """Recreate the source DB's schema exactly, as the source reports it."""
+    stmts = src.execute(
+        "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL "
+        "AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    for (stmt,) in stmts:
+        dst.execute(stmt)
 
 
-def _score_for(status: str) -> int | None:
-    """Realistic score distribution. 'new' rows are a mix of scored and
-    unscored (NULL) so the histogram's scored/unscored split looks alive."""
-    if status in ("drafted", "applied"):
-        return random.randint(78, 92)      # only strong rows get drafted/applied
-    if status == "archived":
-        return random.randint(70, 85)
-    # 'new': ~40% still unscored (NULL), rest spread across the full range
-    if random.random() < 0.4:
-        return None
-    return random.randint(15, 95)
+def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    """Column names from the DB, never from recall."""
+    return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
 
-def build_rows() -> list[tuple]:
-    rows = []
-    for i, status in enumerate(STATUS_PLAN):
-        source = random.choice(SOURCES)
-        company = random.choice(COMPANIES)
-        title = random.choice(TITLES)
-        slug = title.lower().replace(" ", "-")
-        score = _score_for(status)
-        drafted_or_beyond = status in ("drafted", "applied", "archived")
-        rows.append((
-            source,
-            f"demo-{i:04d}",                                   # external_id
-            f"https://example.com/{company.lower().replace(' ', '-')}/jobs/{slug}",
-            title,
-            company,
-            "Data & Analytics",                               # category
-            random.choice(JOB_TYPES),
-            random.choice(LOCATIONS),
-            None,                                             # salary (often absent)
-            f"Sample listing for a {title} role at {company}. "
-            "Synthetic demo data — not a real posting.",      # description
-            _iso(random.randint(1, 40)),                      # publication_date
-            _iso(random.randint(0, 5)),                       # fetched_at
-            f"demohash{i:04d}",                               # content_hash
-            1 if score is not None else None,                 # prefilter_pass
-            "data_analyst" if drafted_or_beyond else None,    # ladder_match
-            score,                                            # relevance_score
-            "Synthetic score for demo." if score is not None else None,
-            status,
-            _iso(random.randint(0, 10)) if status != "new" else None,  # status_updated_at
-            # notes only on applied/archived, generic — no real ATS/PII text
-            "Demo note." if status in ("applied", "archived") else None,
-        ))
-    return rows
+def _copy_table(src: sqlite3.Connection, dst: sqlite3.Connection,
+                table: str, cols: list[str]) -> int:
+    rows = src.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
+    if not rows:
+        return 0
+    placeholders = ", ".join(["?"] * len(cols))
+    dst.executemany(
+        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+        rows,
+    )
+    return len(rows)
 
 
 def main() -> None:
+    if not SOURCE_PATH.exists():
+        raise SystemExit(f"source DB not found: {SOURCE_PATH}")
+
     if DEMO_PATH.exists():
-        DEMO_PATH.unlink()                                   # idempotent: fresh each run
+        DEMO_PATH.unlink()                          # idempotent: fresh each run
         print(f"removed existing {DEMO_PATH.name}")
 
-    init_db(DEMO_PATH)                                        # real schema, no fabricated DDL
-    rows = build_rows()
-
-    placeholders = ", ".join(["?"] * len(INSERT_COLS))
-    sql = f"INSERT INTO jobs ({', '.join(INSERT_COLS)}) VALUES ({placeholders})"
-
-    with get_connection(DEMO_PATH) as conn:
-        conn.executemany(sql, rows)
+    with get_connection(SOURCE_PATH) as src, get_connection(DEMO_PATH) as dst:
+        _clone_schema(src, dst)
+        # Columns come from the source DB itself. If a column is added to
+        # production tomorrow, this copies it without being edited.
+        #
+        # EXCEPT cover_letter (excluded 2026-07-17, Poi's call): the letters
+        # are generated from profile.md, the one file that never enters this
+        # repo. A committed DB is public whether or not a widget renders the
+        # column, and permanent in git history once pushed. Excluding it here
+        # is the only place the exclusion can happen. The site still shows
+        # that drafting occurred — status, score, and event — without the text.
+        WITHHELD = {"cover_letter"}
+        job_cols = [c for c in _columns(src, "jobs") if c not in WITHHELD]
+        event_cols = _columns(src, "job_events")
+        print(f"  jobs columns   : {len(job_cols)} -> {', '.join(job_cols)}")
+        print(f"  withheld       : {', '.join(sorted(WITHHELD))}")
+        n_jobs = _copy_table(src, dst, "jobs", job_cols)
+        n_events = _copy_table(src, dst, "job_events", event_cols)
 
     # Verify from the live answer, not from the plan we just wrote.
     with get_connection(DEMO_PATH) as conn:
@@ -141,15 +127,39 @@ def main() -> None:
         by_status = conn.execute(
             "SELECT status, COUNT(*) FROM jobs GROUP BY status"
         ).fetchall()
-        scored = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE relevance_score IS NOT NULL"
-        ).fetchone()[0]
+        letters = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE cover_letter IS NOT NULL"
+        ).fetchone()[0]        # Every 'applied' row must have a backing event. This is the claim
+        # the public site makes; it should not be able to make it falsely.
+        unbacked = conn.execute("""
+            SELECT COUNT(*) FROM jobs j
+            WHERE j.status = 'applied'
+              AND NOT EXISTS (
+                  SELECT 1 FROM job_events e
+                  WHERE e.job_id = j.id AND e.to_status = 'applied'
+              )
+        """).fetchone()[0]
 
     print(f"built {DEMO_PATH}")
-    print(f"  total jobs : {total}")
-    print(f"  job_events : {events}  (must be 0 — honestly empty)")
-    print(f"  scored     : {scored} / {total}")
-    print(f"  by status  : {dict(by_status)}")
+    print(f"  copied jobs   : {n_jobs}")
+    print(f"  copied events : {n_events}")
+    print(f"  total jobs    : {total}")
+    print(f"  job_events    : {events}")
+    print(f"  cover letters : {letters}  (must be 0 — withheld)")
+    print(f"  by status     : {dict(by_status)}")
+    print(f"  unbacked applied : {unbacked}  (must be 0)")
+
+    if letters:
+        raise SystemExit(
+            f"REFUSING: {letters} cover letter(s) reached the public DB. "
+            "These are profile.md restated in prose and must not be committed."
+        )
+
+    if unbacked:
+        raise SystemExit(
+            f"REFUSING: {unbacked} 'applied' row(s) have no backing event. "
+            "The public site would claim an application it cannot evidence."
+        )
 
 
 if __name__ == "__main__":
