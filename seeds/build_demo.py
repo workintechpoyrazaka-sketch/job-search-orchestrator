@@ -52,8 +52,8 @@ SOURCES = ["remotive", "himalayas", "remoteok"]
 LOCATIONS = ["Remote (Worldwide)", "Remote (EMEA)", "Remote (Global)", "Remote"]
 JOB_TYPES = ["full_time", "contract"]
 
-# Insert columns, explicit. We insert directly rather than via upsert_jobs
-# because the demo must SET status/score/notes, which upsert_jobs (a
+# Insert columns, explicit. We insert directly rather than via insert_new_jobs
+# because the demo must SET status/score/notes, which insert_new_jobs (a
 # collect-only helper) does not touch.
 INSERT_COLS = [
     "source", "external_id", "url", "title", "company", "category",

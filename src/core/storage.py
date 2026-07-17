@@ -64,9 +64,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
         conn.executescript(SCHEMA)
 
 
-def upsert_jobs(conn: sqlite3.Connection, jobs: list[dict]) -> dict:
+def insert_new_jobs(conn: sqlite3.Connection, jobs: list[dict]) -> dict:
     """Insert jobs, skipping duplicates on (source, external_id).
 
+    NOT an upsert. On conflict the existing row is left UNTOUCHED, so
+    changed adapter values never reach rows already in the DB — the 278
+    fabricated `Worldwide` locations are frozen and re-collection cannot
+    rewrite them. That requires an explicit migration.
     Returns a {"new": int, "duplicate": int} summary.
     """
     placeholders = ", ".join(["?"] * len(COLUMNS))
@@ -97,5 +101,5 @@ if __name__ == "__main__":
         "fetched_at": "2026-06-25T12:00:00", "content_hash": "abc",
     }]
     with get_connection() as conn:
-        print(upsert_jobs(conn, sample))
-        print(upsert_jobs(conn, sample))
+        print(insert_new_jobs(conn, sample))
+        print(insert_new_jobs(conn, sample))
