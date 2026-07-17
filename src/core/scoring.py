@@ -15,7 +15,11 @@ from src.core.storage import get_connection
 # Pinned model ID (not the alias) so the score logic stays reproducible.
 MODEL = "claude-haiku-4-5-20251001"
 # Cheap tier for high-volume triage. Cap description length to bound tokens.
-MAX_DESC_CHARS = 2000
+# Bound, not filter: guards against a pathological payload, never decides
+# which text the model may judge. Corpus: 283 rows, longest 53,423 chars.
+# Was 2000, which sent 40% of the mean row and hid seniority gates past the
+# cut (row 406: '3+ year' at 2386 -> 85 truncated vs 72 at full text).
+MAX_DESC_CHARS = 60000
 
 SYSTEM_PROMPT = (
     "You screen remote job postings for a Turkey-based data analyst seeking "
