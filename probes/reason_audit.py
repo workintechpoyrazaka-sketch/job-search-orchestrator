@@ -33,7 +33,15 @@ DB = Path(__file__).resolve().parents[1] / "data" / "demo.db"
 # expectation False -> reason is grounded only if pattern is ABSENT
 CHECKS = [
     (391, "MBI clearance required",              r"\bmbi\b",                 True),
-    (391, "no explicit citizenship requirement", r"citizenship required:\s*no", True),
+    # NB: patterns run against RAW stored HTML, not rendered text. The
+    # first committed version of this check used r"citizenship required:\s*no"
+    # and reported GDIT UNSUPPORTED -- falsely: the text reads
+    # "US Citizenship Required:</h3>No", tag between label and value. The
+    # audit of ungrounded claims shipped with an ungrounded claim of its
+    # own. Fixed 2026-07-18; the exit-code hardening below exists because
+    # of this: the bad run printed its own discrepancy and still exited 0.
+    (391, "no explicit citizenship requirement",
+     r"citizenship required:\s*(?:<[^>]+>\s*)*no\b", True),
     (396, "explicitly excludes data/AI scientists", r"not computer vision or data/ai scientists", True),
     (962, "3+ years requirement",                r"3\+\s*years?",            True),
     (414, "explicit worldwide eligibility",      r"\bworldwide\b",           True),
@@ -45,9 +53,13 @@ CHECKS = [
 ]
 
 
+EXPECTED_UNSUPPORTED = {412, 616}
+
+
 def main() -> None:
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     passed = failed = 0
+    unsupported_ids = set()
     for job_id, claim, pattern, expect_present in CHECKS:
         row = conn.execute(
             "SELECT company, description FROM jobs WHERE id = ?", (job_id,)
@@ -59,10 +71,19 @@ def main() -> None:
         ok = (found == expect_present)
         passed += ok
         failed += (not ok)
+        if not ok:
+            unsupported_ids.add(job_id)
         verdict = "GROUNDED " if ok else "UNSUPPORTED"
         print(f"  [{verdict}] #{job_id} {company}: {claim!r}")
-    print(f"\n{passed} grounded, {failed} unsupported "
-          f"(expected: 2 unsupported -- jobs 412, 616; see docstring)")
+    print(f"\n{passed} grounded, {failed} unsupported")
+    if unsupported_ids != EXPECTED_UNSUPPORTED:
+        raise SystemExit(
+            f"AUDIT SHAPE CHANGED: unsupported set is {sorted(unsupported_ids)}, "
+            f"expected {sorted(EXPECTED_UNSUPPORTED)}. Either the data moved or "
+            "a pattern is wrong (it has been wrong before -- see the GDIT note "
+            "above). Do not commit until this is understood."
+        )
+    print(f"shape OK: unsupported == {sorted(EXPECTED_UNSUPPORTED)}, as documented")
 
 
 if __name__ == "__main__":
