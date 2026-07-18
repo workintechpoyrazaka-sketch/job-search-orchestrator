@@ -190,3 +190,57 @@ def apply_to_job(
             f"before applying (use confirm_and_apply)"
         )
     _apply_transition(conn, job_id, "applied", note)
+
+
+def verify_invariants(conn: sqlite3.Connection) -> list[str]:
+    """Check the invariant stated at the top of this module, for real.
+
+    Returns a list of human-readable violations; empty list means the DB
+    honors the contract. Three clauses:
+      1. every non-'new' job has at least one event (no unevidenced state)
+      2. every evented job's status equals its latest event's to_status
+      3. every evented job's status_updated_at equals its latest event's at
+    Stated here since Module 4; enforced nowhere until 2026-07-18. Callers
+    decide whether violations are fatal (build_demo: yes).
+    """
+    problems: list[str] = []
+
+    rows = conn.execute("""
+        SELECT j.id FROM jobs j
+        WHERE j.status != 'new'
+          AND NOT EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = j.id)
+    """).fetchall()
+    if rows:
+        problems.append(f"non-'new' jobs with no event: {[r[0] for r in rows]}")
+
+    rows = conn.execute("""
+        SELECT j.id, j.status,
+               (SELECT e.to_status FROM job_events e WHERE e.job_id = j.id
+                ORDER BY e.at DESC, e.id DESC LIMIT 1) AS latest
+        FROM jobs j
+        WHERE EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = j.id)
+          AND j.status != (SELECT e.to_status FROM job_events e
+                           WHERE e.job_id = j.id
+                           ORDER BY e.at DESC, e.id DESC LIMIT 1)
+    """).fetchall()
+    if rows:
+        problems.append(f"status != latest event.to_status: {[tuple(r) for r in rows]}")
+
+    rows = conn.execute("""
+        SELECT j.id FROM jobs j
+        WHERE EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = j.id)
+          AND j.status_updated_at != (SELECT e.at FROM job_events e
+                                      WHERE e.job_id = j.id
+                                      ORDER BY e.at DESC, e.id DESC LIMIT 1)
+    """).fetchall()
+    if rows:
+        problems.append(f"status_updated_at != latest event.at: {[r[0] for r in rows]}")
+
+    orphans = conn.execute("""
+        SELECT e.id FROM job_events e
+        WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = e.job_id)
+    """).fetchall()
+    if orphans:
+        problems.append(f"events referencing missing jobs: {[r[0] for r in orphans]}")
+
+    return problems
