@@ -75,6 +75,13 @@ PUBLIC = {
     "job_type", "location", "salary", "description", "publication_date",
     "fetched_at", "content_hash", "prefilter_pass", "ladder_match",
     "relevance_score", "status", "status_updated_at",
+    # score_reason: PUBLIC as of 2026-07-18, decided after reading all 34
+    # and verifying checkable claims against stored posting text
+    # (probes/reason_audit.py): 32/34 grounded; rows 412 and 616 carry
+    # unsupported eligibility claims, published deliberately as evidence
+    # of the failure mode the truncation probe named (post-hoc narrative,
+    # not mechanism). Both errors favor the candidate, not the company.
+    "score_reason",
 }
 WITHHELD = {
     # profile.md restated in prose; the one file that never enters the repo.
@@ -82,11 +89,6 @@ WITHHELD = {
     # hand-written private commentary (e.g. the Uken eligibility note);
     # the dashboard never rendered it, so withholding costs the site nothing.
     "notes",
-    # score_reason: DELIBERATELY ABSENT from both sets as of 2026-07-18.
-    # The build refuses to run until it is classified. The A/B probe proved
-    # these are post-hoc narrative, not mechanism; whether to publish
-    # confabulated narratives attached to real company names is a decision,
-    # and this gap is what forces it to be made explicitly.
 }
 
 

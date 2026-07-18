@@ -157,12 +157,20 @@ if n_scored:
 else:
     st.info("No scored jobs yet.")
 
-# ---- drafted queue (safe money-view: no cover_letter, no notes) ----
+# ---- drafted queue (no cover_letter, no notes: withheld at build time) ----
 st.subheader("Drafted queue")
+st.caption(
+    "score_reason is LLM testimony, not a mechanism trace: an A/B probe "
+    "(probes/truncation.py) showed the number is stable while the story is "
+    "sampled. Audited against stored posting text on 2026-07-18 "
+    "(probes/reason_audit.py): 32/34 grounded; rows 412 and 616 contain "
+    "unsupported eligibility claims, retained deliberately as evidence of "
+    "the failure mode."
+)
 drafted = q(
     conn,
     """
-    SELECT id, title, company, source, relevance_score, url
+    SELECT id, title, company, source, relevance_score, score_reason, url
     FROM jobs
     WHERE status = 'drafted'
     ORDER BY relevance_score DESC
