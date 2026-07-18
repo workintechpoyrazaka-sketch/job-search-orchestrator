@@ -91,6 +91,14 @@ WITHHELD = {
     "notes",
 }
 
+# job_events: the transitions ARE the public evidence; the notes are running
+# commentary, including on in-progress hiring processes (withheld 2026-07-18
+# while an application is live -- content is professional, but disclosing the
+# state of an open negotiation is a choice, and this makes it deliberate).
+# Reclassify and rebuild to publish later.
+EVENT_PUBLIC = {"id", "job_id", "from_status", "to_status", "at"}
+EVENT_WITHHELD = {"note"}
+
 
 def _clone_schema(src: sqlite3.Connection, dst: sqlite3.Connection) -> None:
     """Recreate the source DB's schema exactly, as the source reports it."""
@@ -120,23 +128,24 @@ def _copy_table(src: sqlite3.Connection, dst: sqlite3.Connection,
     return len(rows)
 
 
-def _classify(all_cols: list[str]) -> list[str]:
+def _classify(table: str, all_cols: list[str],
+              public: set[str], withheld: set[str]) -> list[str]:
     """Return the public column list, or die naming every unclassified column."""
-    unclassified = [c for c in all_cols if c not in PUBLIC and c not in WITHHELD]
+    unclassified = [c for c in all_cols if c not in public and c not in withheld]
     if unclassified:
         raise SystemExit(
-            f"REFUSING: unclassified column(s) in jobs: {unclassified}. "
-            "Every column must be listed in PUBLIC or WITHHELD "
-            "(seeds/build_demo.py). No default. Classify, then rebuild."
+            f"REFUSING: unclassified column(s) in {table}: {unclassified}. "
+            "Every column must be classified in seeds/build_demo.py. "
+            "No default. Classify, then rebuild."
         )
-    ghosts = (PUBLIC | WITHHELD) - set(all_cols)
+    ghosts = (public | withheld) - set(all_cols)
     if ghosts:
         raise SystemExit(
-            f"REFUSING: classified column(s) not in the live schema: "
-            f"{sorted(ghosts)}. The classification has drifted from "
+            f"REFUSING: column(s) classified for {table} not in the live "
+            f"schema: {sorted(ghosts)}. The classification has drifted from "
             "production; fix the lists, then rebuild."
         )
-    return [c for c in all_cols if c in PUBLIC]
+    return [c for c in all_cols if c in public]
 
 
 def _run_gates(build_path: Path) -> None:
@@ -147,16 +156,18 @@ def _run_gates(build_path: Path) -> None:
         by_status = dict(conn.execute(
             "SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
 
-        cols = set(_columns(conn, "jobs"))
-        for col in sorted(WITHHELD & cols):
-            n = conn.execute(
-                f"SELECT COUNT(*) FROM jobs WHERE {col} IS NOT NULL"
-            ).fetchone()[0]
-            if n:
-                raise SystemExit(
-                    f"REFUSING: {n} row(s) carry withheld column {col!r} "
-                    "in the built DB. Copy must not have excluded it; abort."
-                )
+        for table, withheld in (("jobs", WITHHELD), ("job_events", EVENT_WITHHELD)):
+            cols = set(_columns(conn, table))
+            for col in sorted(withheld & cols):
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {col} IS NOT NULL"
+                ).fetchone()[0]
+                if n:
+                    raise SystemExit(
+                        f"REFUSING: {n} row(s) carry withheld column "
+                        f"{table}.{col} in the built DB. Copy must not have "
+                        "excluded it; abort."
+                    )
 
         unbacked = conn.execute("""
             SELECT COUNT(*) FROM jobs j
@@ -198,10 +209,14 @@ def main() -> None:
         with get_connection(SOURCE_PATH) as src, get_connection(BUILD_PATH) as dst:
             _clone_schema(src, dst)
             all_cols = _columns(src, "jobs")
-            job_cols = _classify(all_cols)
-            event_cols = _columns(src, "job_events")
+            job_cols = _classify("jobs", all_cols, PUBLIC, WITHHELD)
+            all_event_cols = _columns(src, "job_events")
+            event_cols = _classify("job_events", all_event_cols,
+                                   EVENT_PUBLIC, EVENT_WITHHELD)
             print(f"  public cols  : {', '.join(job_cols)}")
             print(f"  withheld     : {', '.join(sorted(set(all_cols) - set(job_cols)))}")
+            print(f"  event cols   : {', '.join(event_cols)} "
+                  f"(withheld: {', '.join(sorted(set(all_event_cols) - set(event_cols)))})")
             n_jobs = _copy_table(src, dst, "jobs", job_cols)
             n_events = _copy_table(src, dst, "job_events", event_cols)
             print(f"  copied       : {n_jobs} jobs, {n_events} events")
