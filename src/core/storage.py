@@ -68,9 +68,15 @@ def insert_new_jobs(conn: sqlite3.Connection, jobs: list[dict]) -> dict:
     """Insert jobs, skipping duplicates on (source, external_id).
 
     NOT an upsert. On conflict the existing row is left UNTOUCHED, so
-    changed adapter values never reach rows already in the DB — the 278
-    fabricated `Worldwide` locations are frozen and re-collection cannot
-    rewrite them. That requires an explicit migration.
+    changed adapter values never reach rows already in the DB. Consequence:
+    the `Worldwide` tokens the Himalayas adapter fabricated from empty
+    locationRestrictions (fixed 2026-07; silence-for-silence) are frozen
+    in rows collected before the fix, and re-collection cannot rewrite
+    them -- that requires an explicit migration. A count is deliberately
+    not stated here: an earlier version said "278", which a later purge
+    made stale, and surviving fabricated tokens are now indistinguishable
+    from legitimate worldwide-filtered results. Docstrings should not
+    carry numbers the DB can contradict.
     Returns a {"new": int, "duplicate": int} summary.
     """
     placeholders = ", ".join(["?"] * len(COLUMNS))
