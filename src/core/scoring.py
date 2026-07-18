@@ -66,6 +66,23 @@ def _parse_score(text):
     return {"score": score, "reason": str(obj["reason"]).strip()}
 
 
+def _extract_text(resp):
+    """Return the model's text output, tolerant of thinking blocks.
+
+    Same doctrine as drafting._extract_text (Module 3): select the block
+    by TYPE, never by position. Haiku 4.5 happens to put text at
+    content[0] today, which is why the positional read never failed --
+    but "works because the current model is shaped that way" is exactly
+    the kind of accident that breaks silently on a repin. Ported
+    2026-07-18 after cold review caught the lesson applied in one module
+    and not its sibling.
+    """
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise ValueError(f"no text block in reply: {resp.content!r}")
+
+
 def score_job(client, title, company, location, description):
     """One Haiku call -> a clamped relevance score and its reason."""
     resp = client.messages.create(
@@ -78,7 +95,7 @@ def score_job(client, title, company, location, description):
             "content": _build_user_message(title, company, location, description),
         }],
     )
-    return _parse_score(resp.content[0].text)
+    return _parse_score(_extract_text(resp))
 
 
 def run_scoring(conn, client, limit=None):
