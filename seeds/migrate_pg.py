@@ -139,13 +139,15 @@ def main() -> None:
         print(line)
 
     with psycopg.connect(PG_DSN) as pg:
-        preconditions(src, pg)
+        preconditions(src, pg, wipe=wipe)
         print("preconditions OK")
         if not execute:
             print("DRY RUN — nothing written. Re-run with --execute.")
             return
         with pg.transaction():
             with pg.cursor() as cur:
+                if wipe:
+                    cur.execute("TRUNCATE jobs, job_events RESTART IDENTITY CASCADE")
                 cur.executemany(
                     f"INSERT INTO jobs ({', '.join(JOB_COLS)}) "
                     f"VALUES ({', '.join('%(' + c + ')s' for c in JOB_COLS)})", jobs)
