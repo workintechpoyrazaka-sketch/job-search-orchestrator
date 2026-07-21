@@ -20,3 +20,8 @@ CREATE ROLE orchestrator_app LOGIN;
 GRANT SELECT, INSERT, UPDATE ON jobs TO orchestrator_app;
 GRANT SELECT, INSERT ON job_events TO orchestrator_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO orchestrator_app;
+
+-- App login role must be able to assume the public read role
+-- (SET LOCAL ROLE public_reader). Without this membership every
+-- public request 500s on the role switch.
+GRANT public_reader TO orchestrator_app;
