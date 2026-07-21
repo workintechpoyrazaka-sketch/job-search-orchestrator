@@ -65,7 +65,7 @@ def normalize_ts(raw: str | None, *, log: list[str], ctx: str) -> datetime | Non
     return converted
 
 
-def preconditions(src: sqlite3.Connection, pg: psycopg.Connection) -> None:
+def preconditions(src: sqlite3.Connection, pg: psycopg.Connection, *, wipe: bool = False) -> None:
     n_jobs = src.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
     n_events = src.execute("SELECT COUNT(*) FROM job_events").fetchone()[0]
     if (n_jobs, n_events) != (EXPECTED_JOBS, EXPECTED_EVENTS):
@@ -78,13 +78,19 @@ def preconditions(src: sqlite3.Connection, pg: psycopg.Connection) -> None:
         for v in violations:
             print(f"  INVARIANT VIOLATION: {v}", file=sys.stderr)
         sys.exit("ABORT: source DB fails its own invariants; migrate nothing.")
-    with pg.cursor() as cur:
-        for table in ("jobs", "job_events"):
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            n = cur.fetchone()[0]
-            if n:
-                sys.exit(f"ABORT: target {table} already has {n} rows; "
-                         "this script populates empty tables only.")
+    if wipe:
+        with pg.cursor() as cur:
+            for table in ("jobs", "job_events"):
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                print(f"  --wipe: will TRUNCATE {table} ({cur.fetchone()[0]} rows) in-transaction")
+    else:
+        with pg.cursor() as cur:
+            for table in ("jobs", "job_events"):
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                n = cur.fetchone()[0]
+                if n:
+                    sys.exit(f"ABORT: target {table} already has {n} rows; "
+                             "this script populates empty tables only.")
 
 
 def postconditions(pg: psycopg.Connection) -> None:
@@ -110,6 +116,7 @@ def postconditions(pg: psycopg.Connection) -> None:
 
 def main() -> None:
     execute = "--execute" in sys.argv
+    wipe = "--wipe" in sys.argv
     src = sqlite3.connect(SQLITE_PATH)
     src.row_factory = sqlite3.Row
     ts_log: list[str] = []
