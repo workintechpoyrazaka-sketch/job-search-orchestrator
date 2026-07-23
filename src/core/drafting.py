@@ -15,6 +15,8 @@ import re
 import sys
 from datetime import datetime
 
+from src.core.tracking import transition, TransitionError
+
 from anthropic import Anthropic
 
 from src.core.storage import get_connection
@@ -250,10 +252,15 @@ def run_drafting(conn, client, profile_text, limit=None):
             client, analysis, profile_text, row["title"], row["company"],
         )
         conn.execute(
-            "UPDATE jobs SET cover_letter = ?, status = 'drafted', "
-            "status_updated_at = ? WHERE id = ?",
-            (letter, datetime.now().isoformat(timespec="seconds"), row["id"]),
+            "UPDATE jobs SET cover_letter = ? WHERE id = ?",
+            (letter, row["id"]),
         )
+        try:
+            transition(conn, row["id"], "drafted")
+        except TransitionError:
+            conn.rollback()
+            raise
+
         conn.commit()                                 # checkpoint per row
         drafted += 1
         print(f"  [drafted] {row['company']} -- {row['title']} "
