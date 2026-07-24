@@ -35,6 +35,22 @@ TRANSITIONS: dict[str, set[str]] = {
 # live here. What is unique to 'applied' (authorization) lives in its door.
 REQUIRES_NOTE: set[str] = {"archived", "applied"}
 
+
+def status_domain_sql() -> str:
+    """Project TRANSITIONS into a CHECK clause for the schema layer.
+
+    Generated, never hand-written: the value set is derived from TRANSITIONS
+    (keys plus every destination), so adding a state there regenerates the
+    constraint and no second list can drift. Enforces the legal DOMAIN (which
+    values may exist), never the legal TRANSITIONS -- the graph stays here.
+
+    Safe to interpolate: the state names are module-level literals, never
+    caller input, so there is no injection surface.
+    """
+    states = sorted(set(TRANSITIONS) | {v for s in TRANSITIONS.values() for v in s})
+    values = ", ".join(f"'{s}'" for s in states)
+    return f"CHECK (status IN ({values}))"
+
 # Phrases that hint a job may be eligibility-gated in a way the pipeline cannot
 # see from structured fields (the Uken blind spot). This list is an ASSISTANT,
 # NOT AN ORACLE: a hit directs the eye to a likely disqualifier, but an EMPTY
