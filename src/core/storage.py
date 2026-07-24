@@ -1,9 +1,9 @@
 """SQLite storage layer: the orchestrator's system of record."""
 
-import sqlite3
-from pathlib import Path
+import os
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "jobs.db"
+import psycopg
+from psycopg.rows import dict_row
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -49,22 +49,23 @@ COLUMNS = [
 ]
 
 
-def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
-    """Open a connection with name-based row access."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def get_connection(dsn: str | None = None) -> psycopg.Connection:
+    """Open a Postgres connection with dict-style row access (row["col"]).
+
+    dsn defaults to DATABASE_URL (fail-closed, matching the gate and auth.py);
+    probes pass an explicit scratch DSN to override. No mkdir/PRAGMA: Postgres
+    creates nothing on connect and always enforces foreign keys.
+    """
+    return psycopg.connect(dsn or os.environ["DATABASE_URL"], row_factory=dict_row)
 
 
-def init_db(db_path: Path = DB_PATH) -> None:
+def init_db(dsn: str | None = None) -> None:
     """Create the jobs table if it does not exist."""
-    with get_connection(db_path) as conn:
+    with get_connection(dsn) as conn:
         conn.executescript(SCHEMA)
 
 
-def insert_new_jobs(conn: sqlite3.Connection, jobs: list[dict]) -> dict:
+def insert_new_jobs(conn: psycopg.Connection, jobs: list[dict]) -> dict:
     """Insert jobs, skipping duplicates on (source, external_id).
 
     NOT an upsert. On conflict the existing row is left UNTOUCHED, so
