@@ -13,7 +13,6 @@ import html
 import json
 import re
 import sys
-from datetime import datetime
 
 from src.core.tracking import transition, TransitionError
 
