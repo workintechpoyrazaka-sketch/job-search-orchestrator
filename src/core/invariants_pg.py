@@ -22,7 +22,9 @@ true). The SQLite sibling behaves identically; fixing one implementation
 alone would make the siblings disagree, which is worse.
 
 Standalone: python -m src.core.invariants_pg   (exit 1 on violations)
-DSN: PG_DSN env var, default postgresql:///orchestrator
+DSN: DATABASE_URL, with PG_DSN as an explicit override for pointing the
+gate at a scratch store. Neither set raises at import -- a deploy gate
+that can silently verify the wrong database is worse than no gate.
 """
 
 import os
@@ -30,7 +32,7 @@ import sys
 
 import psycopg
 
-PG_DSN = os.environ.get("PG_DSN", "postgresql:///orchestrator")
+PG_DSN = os.environ.get("PG_DSN") or os.environ["DATABASE_URL"]
 
 _LATEST = """(SELECT e.{col} FROM job_events e WHERE e.job_id = j.id
               ORDER BY e.at DESC, e.id DESC LIMIT 1)"""
