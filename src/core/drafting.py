@@ -222,22 +222,31 @@ def write_cover_letter(client, analysis, profile_text, title, company):
     return letter
 
 
-def run_drafting(conn, client, profile_text, limit=None):
+def run_drafting(conn, client, profile_text, limit=None, min_score=None):
     """Draft cover letters for scored, not-yet-drafted jobs; update in place.
 
     Symmetric to run_scoring: idempotent selection + a per-row commit as a
     checkpoint. The status column is the not-done marker -- a scored job is
     still status='new' (scoring never touches status), so status='new' AND a
-    passing score means "eligible, not yet drafted"; the UPDATE flips it to
-    'drafted', so a re-run skips it. Fail loud (no per-row catch): if a model
+    passing score means "eligible, not yet drafted". The UPDATE writes the
+    letter alone; transition() performs the new -> drafted move and records
+    the event, so a re-run skips it. Fail loud (no per-row catch): if a model
     call raises mid-batch, finished drafts are already committed and a re-run
     resumes cleanly. Nothing is sent -- status='drafted' only, application
     stays in Poi's hands.
+
+    Selection is ordered by relevance_score DESC, so --draft-limit N takes the
+    N best candidates rather than the N lowest rowids. min_score falls back to
+    MIN_SCORE when the caller passes None.
     """
+    if min_score is None:
+        min_score = MIN_SCORE
+
     sql = ("SELECT id, title, company, location, description FROM jobs "
-           "WHERE relevance_score >= ? AND status = 'new'")
-    params = [MIN_SCORE]
-    if limit:
+           "WHERE relevance_score >= ? AND status = 'new' "
+           "ORDER BY relevance_score DESC, id")
+    params = [min_score]
+    if limit is not None:
         sql += " LIMIT ?"
         params.append(int(limit))
     rows = conn.execute(sql, params).fetchall()

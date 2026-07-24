@@ -40,7 +40,8 @@ def _require_api_key() -> None:
         )
 
 
-def run_all(skip_collect: bool = False, draft_limit: int | None = None) -> dict:
+def run_all(skip_collect: bool = False, draft_limit: int | None = None,
+            min_score: int | None = None) -> dict:
     """Assemble shared resources once, then run the four stages in order.
 
     Returns a combined totals dict. Raises on the first stage that fails --
@@ -81,7 +82,8 @@ def run_all(skip_collect: bool = False, draft_limit: int | None = None) -> dict:
         totals["score"] = run_scoring(conn, client)
 
         print("[run] === draft ===")
-        totals["draft"] = run_drafting(conn, client, profile, limit=draft_limit)
+        totals["draft"] = run_drafting(conn, client, profile, limit=draft_limit,
+                                       min_score=min_score)
     finally:
         conn.close()  # explicit close; stages commit their own writes
 
@@ -99,10 +101,15 @@ def _main(argv: list[str]) -> int:
         "--draft-limit", type=int, default=None,
         help="cap the number of cover letters drafted (e.g. 1 for a smoke run)",
     )
+    parser.add_argument(
+        "--min-score", type=int, default=None,
+        help="override the drafting score threshold (default: drafting.MIN_SCORE)",
+    )
     args = parser.parse_args(argv[1:])
 
     try:
-        run_all(skip_collect=args.skip_collect, draft_limit=args.draft_limit)
+        run_all(skip_collect=args.skip_collect, draft_limit=args.draft_limit,
+                min_score=args.min_score)
     except Exception as e:
         # Fail-fast: report where we are and stop. Re-run is safe (idempotent).
         print(f"[run] FAILED: {type(e).__name__}: {e}", file=sys.stderr)
