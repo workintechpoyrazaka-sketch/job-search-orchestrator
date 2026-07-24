@@ -13,7 +13,7 @@ Design (Module 4):
 """
 
 import re
-import sqlite3
+import psycopg
 from datetime import datetime, timezone
 
 
@@ -85,13 +85,14 @@ class TransitionError(Exception):
     """
 
 
-def _now() -> str:
-    """One ISO-8601 UTC timestamp string. Matches status_updated_at's format."""
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    """One timezone-aware UTC timestamp. psycopg adapts it to timestamptz;
+    written to both jobs.status_updated_at and job_events.at so they match."""
+    return datetime.now(timezone.utc)
 
 
 def _apply_transition(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     job_id: int,
     to_status: str,
     note: str | None = None,
@@ -99,53 +100,56 @@ def _apply_transition(
     """Atomically move one job to a new status and record the event.
 
     The ONLY function that writes a status change. Contract:
-      1. SELECT current status; missing row -> raise (free orphan guard).
-      2. Validate current -> to_status against TRANSITIONS; illegal -> raise.
+      1. Inside the transaction, SELECT current status FOR UPDATE (locks the
+         row, closing the read->write TOCTOU window). Missing row -> raise.
+      2. Validate from_status -> to_status against TRANSITIONS; illegal -> raise.
       3. If to_status in REQUIRES_NOTE, note must be non-empty -> else raise.
-      4. In ONE transaction: UPDATE jobs + INSERT job_events. Both or neither.
+      4. UPDATE jobs + INSERT job_events. Both or neither.
 
-    All guards run BEFORE the transaction opens, so any raise leaves the DB
-    untouched. The timestamp is computed once and written to both rows so the
-    job's status_updated_at and the event's `at` are equal by construction.
+    The guards run INSIDE the transaction, because the FOR UPDATE lock must be
+    held from the status read through the write. A raise still leaves the DB
+    untouched -- conn.transaction() rolls back the (write-free) transaction on
+    any exception. The timestamp is computed once and written to both rows so
+    status_updated_at and the event's `at` are equal by construction.
     """
-    # 1. resolve current status (orphan guard)
-    row = conn.execute(
-        "SELECT status FROM jobs WHERE id = ?", (job_id,)
-    ).fetchone()
-    if row is None:
-        raise TransitionError(f"no job with id={job_id}")
-    from_status = row["status"]
+    with conn.transaction():
+        # 1. resolve current status under a row lock (orphan guard + TOCTOU close)
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = %s FOR UPDATE", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise TransitionError(f"no job with id={job_id}")
+        from_status = row[0]
 
-    # 2. legality
-    allowed = TRANSITIONS.get(from_status, set())
-    if to_status not in allowed:
-        raise TransitionError(
-            f"illegal transition {from_status!r} -> {to_status!r} "
-            f"(allowed: {sorted(allowed) or 'none, terminal'})"
-        )
+        # 2. legality
+        allowed = TRANSITIONS.get(from_status, set())
+        if to_status not in allowed:
+            raise TransitionError(
+                f"illegal transition {from_status!r} -> {to_status!r} "
+                f"(allowed: {sorted(allowed) or 'none, terminal'})"
+            )
 
-    # 3. note requirement
-    if to_status in REQUIRES_NOTE and not (note and note.strip()):
-        raise TransitionError(
-            f"transition to {to_status!r} requires a non-empty note"
-        )
+        # 3. note requirement
+        if to_status in REQUIRES_NOTE and not (note and note.strip()):
+            raise TransitionError(
+                f"transition to {to_status!r} requires a non-empty note"
+            )
 
-    # 4. atomic dual write -- one event, one timestamp, two rows
-    now = _now()
-    with conn:  # transaction: commits on success, rolls back on exception
+        # 4. atomic dual write -- one event, one timestamp, two rows
+        now = _now()
         conn.execute(
-            "UPDATE jobs SET status = ?, status_updated_at = ? WHERE id = ?",
+            "UPDATE jobs SET status = %s, status_updated_at = %s WHERE id = %s",
             (to_status, now, job_id),
         )
         conn.execute(
             "INSERT INTO job_events (job_id, from_status, to_status, at, note) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s)",
             (job_id, from_status, to_status, now, note),
         )
 
 
 def transition(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     job_id: int,
     to_status: str,
     note: str | None = None,
@@ -164,7 +168,7 @@ def transition(
 
 
 def apply_to_job(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     job_id: int,
     note: str,
     *,
@@ -192,7 +196,7 @@ def apply_to_job(
     _apply_transition(conn, job_id, "applied", note)
 
 
-def verify_invariants(conn: sqlite3.Connection) -> list[str]:
+def verify_invariants(conn: psycopg.Connection) -> list[str]:
     """Check the invariant stated at the top of this module, for real.
 
     Returns a list of human-readable violations; empty list means the DB
