@@ -119,7 +119,7 @@ def _apply_transition(
         ).fetchone()
         if row is None:
             raise TransitionError(f"no job with id={job_id}")
-        from_status = row[0]
+        from_status = row["status"]
 
         # 2. legality
         allowed = TRANSITIONS.get(from_status, set())
