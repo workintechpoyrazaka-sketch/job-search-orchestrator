@@ -4,7 +4,7 @@ Run: python -m src.collect
 import time
 
 from src.adapters import greenhouse, himalayas, remoteok, remotive
-from src.core.storage import get_connection, init_db, insert_new_jobs
+from src.core.storage import ensure_schema, get_connection, insert_new_jobs
 
 # Search terms tuned to the Data Analyst ladder. Each term = one API call per
 # source. `search` matches title+description, so this casts a wide net; the
@@ -47,13 +47,16 @@ ADAPTERS = {
 
 def collect_one(source: str, search: str) -> dict:
     """Collect one (source, query) into the database; return the upsert summary."""
-    init_db()
+    ensure_schema()
     fetch, normalize = ADAPTERS[source]
     raw_jobs = fetch(search)
     normalized = [normalize(j) for j in raw_jobs]
-    with get_connection() as conn:
+    conn = get_connection()
+    try:
         result = insert_new_jobs(conn, normalized)
-        total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"]
+    finally:
+        conn.close()
     print(
         f"[collect] {source}/search={search}: {result['new']} new, "
         f"{result['duplicate']} duplicate (db total: {total})"

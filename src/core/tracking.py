@@ -231,7 +231,7 @@ def verify_invariants(conn: psycopg.Connection) -> list[str]:
           AND NOT EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = j.id)
     """).fetchall()
     if rows:
-        problems.append(f"non-'new' jobs with no event: {[r[0] for r in rows]}")
+        problems.append(f"non-'new' jobs with no event: {[r["id"] for r in rows]}")
 
     rows = conn.execute("""
         SELECT j.id, j.status,
@@ -244,7 +244,10 @@ def verify_invariants(conn: psycopg.Connection) -> list[str]:
                            ORDER BY e.at DESC, e.id DESC LIMIT 1)
     """).fetchall()
     if rows:
-        problems.append(f"status != latest event.to_status: {[tuple(r) for r in rows]}")
+        problems.append(
+            f"status != latest event.to_status: "
+            f"{[(r['id'], r['status'], r['latest']) for r in rows]}"
+        )
 
     rows = conn.execute("""
         SELECT j.id FROM jobs j
@@ -254,13 +257,13 @@ def verify_invariants(conn: psycopg.Connection) -> list[str]:
                                       ORDER BY e.at DESC, e.id DESC LIMIT 1)
     """).fetchall()
     if rows:
-        problems.append(f"status_updated_at != latest event.at: {[r[0] for r in rows]}")
+        problems.append(f"status_updated_at != latest event.at: {[r["id"] for r in rows]}")
 
     orphans = conn.execute("""
         SELECT e.id FROM job_events e
         WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = e.job_id)
     """).fetchall()
     if orphans:
-        problems.append(f"events referencing missing jobs: {[r[0] for r in orphans]}")
+        problems.append(f"events referencing missing jobs: {[r["id"] for r in orphans]}")
 
     return problems

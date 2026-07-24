@@ -5,42 +5,6 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS jobs (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    source            TEXT NOT NULL,
-    external_id       TEXT NOT NULL,
-    url               TEXT,
-    title             TEXT,
-    company           TEXT,
-    category          TEXT,
-    job_type          TEXT,
-    location          TEXT,
-    salary            TEXT,
-    description       TEXT,
-    publication_date  TEXT,
-    fetched_at        TEXT,
-    content_hash      TEXT,
-    prefilter_pass    INTEGER,
-    ladder_match      TEXT,
-    relevance_score   INTEGER,
-    score_reason      TEXT,
-    status            TEXT DEFAULT 'new',
-    status_updated_at TEXT,
-    notes             TEXT,
-    UNIQUE (source, external_id)
-);
-
-CREATE TABLE IF NOT EXISTS job_events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id      INTEGER NOT NULL,
-    from_status TEXT,
-    to_status   TEXT NOT NULL,
-    at          TEXT NOT NULL,
-    note        TEXT,
-    FOREIGN KEY (job_id) REFERENCES jobs(id)
-);
-"""
 
 COLUMNS = [
     "source", "external_id", "url", "title", "company",
@@ -59,10 +23,28 @@ def get_connection(dsn: str | None = None) -> psycopg.Connection:
     return psycopg.connect(dsn or os.environ["DATABASE_URL"], row_factory=dict_row)
 
 
-def init_db(dsn: str | None = None) -> None:
-    """Create the jobs table if it does not exist."""
-    with get_connection(dsn) as conn:
-        conn.executescript(SCHEMA)
+def ensure_schema(dsn: str | None = None) -> None:
+    """Verify the schema exists. Does NOT create it.
+
+    Schema creation belongs to the migrator, which connects as the owning
+    role. orchestrator_app deliberately holds no CREATE on schema public
+    (least privilege, mirroring the column-scoped grants), so this fails
+    closed with a named error rather than a permission traceback.
+    """
+    conn = get_connection(dsn)
+    try:
+        row = conn.execute(
+            "SELECT to_regclass('public.jobs') AS jobs, "
+            "       to_regclass('public.job_events') AS job_events"
+        ).fetchone()
+        missing = [name for name, oid in row.items() if oid is None]
+        if missing:
+            raise RuntimeError(
+                f"schema not initialized (missing: {', '.join(missing)}) -- "
+                f"apply db/schema.sql via the migrator (runs as the owner role)"
+            )
+    finally:
+        conn.close()
 
 
 def insert_new_jobs(conn: psycopg.Connection, jobs: list[dict]) -> dict:
@@ -95,18 +77,3 @@ def insert_new_jobs(conn: psycopg.Connection, jobs: list[dict]) -> dict:
             dup_count += 1
     conn.commit()
     return {"new": new_count, "duplicate": dup_count}
-
-
-if __name__ == "__main__":
-    init_db()
-    sample = [{
-        "source": "remotive", "external_id": "test-1",
-        "url": "https://example.com", "title": "Data Analyst",
-        "company": "Acme", "category": "data", "job_type": "full_time",
-        "location": "Worldwide", "salary": None,
-        "description": "test", "publication_date": "2026-06-25",
-        "fetched_at": "2026-06-25T12:00:00", "content_hash": "abc",
-    }]
-    with get_connection() as conn:
-        print(insert_new_jobs(conn, sample))
-        print(insert_new_jobs(conn, sample))
