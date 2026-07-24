@@ -55,6 +55,7 @@ def collect_one(source: str, search: str) -> dict:
     try:
         result = insert_new_jobs(conn, normalized)
         total = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"]
+        conn.commit()
     finally:
         conn.close()
     print(

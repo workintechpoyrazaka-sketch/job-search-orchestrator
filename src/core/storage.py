@@ -60,13 +60,20 @@ def insert_new_jobs(conn: psycopg.Connection, jobs: list[dict]) -> dict:
     made stale, and surviving fabricated tokens are now indistinguishable
     from legitimate worldwide-filtered results. Docstrings should not
     carry numbers the DB can contradict.
+    Does NOT commit: the caller owns the connection lifecycle and the
+    transaction boundary, so this stays composable inside a larger
+    transaction (psycopg forbids commit() inside conn.transaction()).
     Returns a {"new": int, "duplicate": int} summary.
     """
-    placeholders = ", ".join(["?"] * len(COLUMNS))
+    placeholders = ", ".join(["%s"] * len(COLUMNS))
     col_names = ", ".join(COLUMNS)
-    # INSERT OR IGNORE relies on the UNIQUE(source, external_id) constraint
-    # to drop re-seen postings without an extra SELECT.
-    sql = f"INSERT OR IGNORE INTO jobs ({col_names}) VALUES ({placeholders})"
+    # ON CONFLICT DO NOTHING relies on the UNIQUE(source, external_id)
+    # constraint to drop re-seen postings without an extra SELECT. Still not
+    # an upsert: the existing row is left untouched (see the docstring).
+    sql = (
+        f"INSERT INTO jobs ({col_names}) VALUES ({placeholders}) "
+        f"ON CONFLICT (source, external_id) DO NOTHING"
+    )
 
     new_count = dup_count = 0
     for job in jobs:
@@ -75,5 +82,4 @@ def insert_new_jobs(conn: psycopg.Connection, jobs: list[dict]) -> dict:
             new_count += 1
         else:
             dup_count += 1
-    conn.commit()
     return {"new": new_count, "duplicate": dup_count}
